@@ -33,20 +33,28 @@ Este documento es mantenido como un proyecto de código abierto y puede ser adop
 2. [Convenciones de Naming](#convenciones-de-naming)
 3. [Estructura de Recursos](#estructura-de-recursos)
 4. [Métodos HTTP Estándar](#métodos-http-estándar)
-5. [Respuestas y Paginación](#respuestas-y-paginación)
-6. [Filtrado, Búsqueda y Ordenamiento](#filtrado-búsqueda-y-ordenamiento)
-7. [Versionado](#versionado)
-8. [Códigos de Estado HTTP](#códigos-de-estado-http)
-9. [Headers HTTP](#headers-http)
-10. [Rate Limiting](#rate-limiting)
-11. [Autenticación y Seguridad](#autenticación-y-seguridad)
-12. [Campos Computados](#campos-computados)
-13. [Idempotencia](#idempotencia)
-14. [Validación Optimista (ETag)](#validación-optimista-etag)
-15. [Manejo de Errores](#manejo-de-errores)
-16. [Eventos en Tiempo Real (SSE)](#eventos-en-tiempo-real-sse)
-17. [Documentación OpenAPI](#documentación-openapi)
-18. [Checklist de Diseño](#checklist-de-diseño)
+5. [Tags y OperationId](#tags-y-operationid)
+6. [Respuestas y Paginación](#respuestas-y-paginación)
+7. [Filtrado, Búsqueda y Ordenamiento](#filtrado-búsqueda-y-ordenamiento)
+8. [Operaciones de Larga Duración](#operaciones-de-larga-duración)
+9. [Operaciones Bulk](#operaciones-bulk)
+10. [Versionado](#versionado)
+11. [Códigos de Estado HTTP](#códigos-de-estado-http)
+12. [Headers HTTP](#headers-http)
+13. [Caching](#caching)
+14. [Content Negotiation](#content-negotiation)
+15. [Rate Limiting](#rate-limiting)
+16. [Autenticación y Seguridad](#autenticación-y-seguridad)
+17. [Campos Computados](#campos-computados)
+18. [Idempotencia](#idempotencia)
+19. [Validación Optimista (ETag)](#validación-optimista-etag)
+20. [Manejo de Errores](#manejo-de-errores)
+21. [Webhooks](#webhooks)
+22. [Eventos en Tiempo Real (SSE)](#eventos-en-tiempo-real-sse)
+23. [Partial Responses](#partial-responses)
+24. [Deprecation](#deprecation)
+25. [Documentación OpenAPI](#documentación-openapi)
+26. [Checklist de Diseño](#checklist-de-diseño)
 
 ---
 
@@ -255,29 +263,507 @@ DELETE /v1/workspaces/{workspaceId}
 
 ---
 
-## Métodos HTTP Estándar
+## Tags y OperationId
 
-| Método | Recurso | Propósito | Body | Response |
-|--------|---------|----------|------|----------|
-| **GET** | `/resources` | Listar recurso | No | 200 + Array |
-| **GET** | `/resources/{id}` | Obtener recurso | No | 200 + Recurso |
-| **HEAD** | `/resources/{id}` | Metadatos sin contenido | No | 200 + Headers |
-| **POST** | `/resources` | Crear recurso | Sí | 201 + Recurso |
-| **POST** | `/resources/{id}:action` | Acción sobre recurso | Opcional | 200 + Resultado |
-| **PATCH** | `/resources/{id}` | Actualizar parcialmente | Sí | 200 + Recurso |
-| **PUT** | `/resources/{id}` | Reemplazar completamente | Sí | 200 + Recurso |
-| **DELETE** | `/resources/{id}` | Eliminar recurso | No | 204 |
+### Tags en OpenAPI
 
-### Diferencia PUT vs PATCH
+Los tags organizan endpoints en categorías lógicas. Cada endpoint debe tener exactamente un tag.
 
-- **PUT:** Reemplaza el recurso completo. Campos omitidos se eliminan.
-- **PATCH:** Actualiza solo los campos proporcionados. Idempotente y seguro.
+```yaml
+tags:
+  - name: Workspaces
+    description: Operaciones sobre workspaces
+  - name: Files
+    description: Operaciones sobre archivos
+  - name: Bundles
+    description: Operaciones sobre bundles resueltos
 
-**Recomendación:** Preferir siempre PATCH para actualizaciones.
+paths:
+  /workspaces:
+    get:
+      tags: [Workspaces]  # Un solo tag
+      summary: Listar workspaces
+    post:
+      tags: [Workspaces]
+      summary: Crear workspace
+
+  /workspaces/{id}/files:
+    get:
+      tags: [Files]
+      summary: Listar archivos
+```
+
+**Reglas para Tags:**
+- ✅ Usar PascalCase singular o plural consistente
+- ✅ Máximo 20 tags por API
+- ✅ Corresponden a los nombres de recursos o entidades
+- ❌ Un tag por endpoint (no múltiples)
+
+### OperationId
+
+Identificador único para cada operación. Debe ser:
+- Único en toda la API
+- Descriptivo
+- Formato: `{resource}#{action}`
+
+```yaml
+paths:
+  /workspaces:
+    get:
+      operationId: workspaces#list
+      summary: Listar workspaces
+    post:
+      operationId: workspaces#create
+      summary: Crear workspace
+
+  /workspaces/{id}:
+    get:
+      operationId: workspaces#getById
+      summary: Obtener workspace por ID
+    patch:
+      operationId: workspaces#update
+      summary: Actualizar workspace
+    delete:
+      operationId: workspaces#delete
+      summary: Eliminar workspace
+
+  /workspaces/{id}:validate:
+    post:
+      operationId: workspaces#validate
+      summary: Validar workspace
+```
+
+**Convención de nombres:**
+- `{resource}#list` → GET /recursos
+- `{resource}#create` → POST /recursos
+- `{resource}#getById` → GET /recursos/{id}
+- `{resource}#update` → PATCH /recursos/{id}
+- `{resource}#replace` → PUT /recursos/{id}
+- `{resource}#delete` → DELETE /recursos/{id}
+- `{resource}#{action}` → POST /recursos/{id}:action
 
 ---
 
-## Respuestas y Paginación
+## Métodos HTTP Estándar
+
+| Método | Recurso | Propósito | Body | Idempotente | Response |
+|--------|---------|----------|------|-------------|----------|
+| **GET** | `/resources` | Listar | No | Sí | 200 + Array |
+| **GET** | `/resources/{id}` | Obtener | No | Sí | 200 + Recurso |
+| **HEAD** | `/resources/{id}` | Metadatos | No | Sí | 200 + Headers |
+| **POST** | `/resources` | Crear | Sí | No | 201 + Recurso |
+| **POST** | `/resources/{id}:action` | Acción | Opcional | Depende | 200 + Resultado |
+| **PUT** | `/resources/{id}` | Reemplazar completo | Sí | Sí | 200 + Recurso |
+| **PATCH** | `/resources/{id}` | Actualizar parcial | Sí | Sí | 200 + Recurso |
+| **DELETE** | `/resources/{id}` | Eliminar | No | Sí | 204 |
+| **OPTIONS** | `/resources/{id}` | Métodos permitidos | No | Sí | 200 + Allow |
+
+### PUT vs PATCH
+
+**PUT:** Reemplaza el recurso completo
+
+```http
+PUT /v1/workspaces/user-service
+Content-Type: application/json
+
+{
+  "name": "New Name",
+  "metadata": {
+    "description": "New description"
+  }
+}
+```
+
+Campos omitidos se eliminan o resetean. Operación idempotente.
+
+**PATCH:** Actualiza solo campos proporcionados
+
+```http
+PATCH /v1/workspaces/user-service
+Content-Type: application/json
+
+{
+  "name": "New Name"
+}
+```
+
+Otros campos permanecen sin cambios. Operación idempotente.
+
+**Recomendación:** Preferir PATCH en la mayoría de casos.
+
+### DELETE vs Soft Delete
+
+**Hard Delete (permanente):**
+```http
+DELETE /v1/workspaces/user-service
+→ 204 No Content (recurso eliminado permanentemente)
+```
+
+**Soft Delete (recomendado):**
+```http
+PATCH /v1/workspaces/user-service
+{
+  "status": "archived"
+}
+→ 200 OK (recurso archivado pero recuperable)
+```
+
+**Política:** Usar soft delete para datos críticos. Hard delete solo para admin.
+
+---
+
+## Operaciones de Larga Duración
+
+Para operaciones que tardan más de 30 segundos, usar **Long-Running Operations**.
+
+### Patrón de Long-Running Operation
+
+```http
+POST /v1/workspaces/{id}:validate
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "name": "operations/validate-abc123",
+  "done": false,
+  "metadata": {
+    "createTime": "2025-10-01T10:30:00Z",
+    "updateTime": "2025-10-01T10:30:05Z"
+  }
+}
+```
+
+### Polling para Obtener Resultado
+
+```http
+GET /v1/operations/validate-abc123
+
+HTTP/1.1 200 OK
+
+{
+  "name": "operations/validate-abc123",
+  "done": true,
+  "result": {
+    "valid": true,
+    "errors": [],
+    "warnings": []
+  }
+}
+```
+
+**Respuesta mientras está en progreso:**
+```json
+{
+  "name": "operations/validate-abc123",
+  "done": false,
+  "metadata": {
+    "progress": 45
+  }
+}
+```
+
+**Estructura de Operation:**
+```json
+{
+  "name": "operations/{operation-id}",
+  "done": false,
+  "result": {},        // Cuando done=true
+  "error": {},         // Si hubo error
+  "metadata": {}       // Progreso, timestamps, etc
+}
+```
+
+---
+
+## Operaciones Bulk
+
+Para operaciones sobre múltiples recursos.
+
+### Bulk Create
+
+```http
+POST /v1/workspaces:batchCreate
+Content-Type: application/json
+
+{
+  "requests": [
+    {
+      "name": "Workspace 1",
+      "slug": "workspace-1"
+    },
+    {
+      "name": "Workspace 2",
+      "slug": "workspace-2"
+    }
+  ]
+}
+
+HTTP/1.1 200 OK
+
+{
+  "responses": [
+    {
+      "workspaceId": "workspace-1",
+      "status": 201
+    },
+    {
+      "workspaceId": "workspace-2",
+      "status": 201
+    }
+  ]
+}
+```
+
+### Bulk Delete
+
+```http
+POST /v1/workspaces:batchDelete
+Content-Type: application/json
+
+{
+  "ids": ["workspace-1", "workspace-2"]
+}
+
+HTTP/1.1 200 OK
+
+{
+  "results": [
+    { "id": "workspace-1", "status": 204 },
+    { "id": "workspace-2", "status": 204 }
+  ]
+}
+```
+
+**Endpoint estándar:** `POST /resources:batch{Action}`
+
+---
+
+## Caching
+
+### Cache-Control Headers
+
+```http
+# Sin cache (sensible a cambios)
+Cache-Control: no-cache, no-store, must-revalidate
+
+# Cache 5 minutos
+Cache-Control: public, max-age=300
+
+# Cache solo para cliente (no intermediarios)
+Cache-Control: private, max-age=3600
+
+# Cache inmutable (no vuelve a validar)
+Cache-Control: public, max-age=31536000, immutable
+```
+
+### ETag y Validación
+
+```http
+# Response inicial
+GET /v1/workspaces/user-service
+→ ETag: "abc123"
+
+# Cliente envía If-None-Match
+GET /v1/workspaces/user-service
+If-None-Match: "abc123"
+
+# Si no cambió
+→ 304 Not Modified (sin body, sin transferencia de datos)
+
+# Si cambió
+→ 200 OK
+   ETag: "def456"
+```
+
+### Estrategias de Caching
+
+| Recurso | Estrategia |
+|---------|-----------|
+| Lista (GET /resources) | `public, max-age=60` (1 min) |
+| Detalle (GET /resources/{id}) | `public, max-age=300` (5 min) |
+| Estático | `public, max-age=31536000` (1 año) |
+| Datos sensibles | `private, no-cache` |
+
+---
+
+## Content Negotiation
+
+### Accept Header
+
+```http
+# Solicitar JSON
+GET /v1/workspaces
+Accept: application/json
+
+# Solicitar YAML
+GET /v1/workspaces
+Accept: application/yaml
+
+# Solicitar XML (si soportado)
+GET /v1/workspaces
+Accept: application/xml
+
+# Multiple (prioridad por orden)
+Accept: application/json, application/yaml;q=0.9
+```
+
+### Respuesta
+
+```http
+GET /v1/workspaces
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{ "items": [...] }
+```
+
+**Soportado obligatoriamente:** `application/json`  
+**Recomendado:** `application/yaml`
+
+---
+
+## Partial Responses
+
+Permitir al cliente seleccionar qué campos retornar.
+
+### Query Parameter `fields`
+
+```http
+GET /v1/workspaces?fields=workspaceId,name,status
+
+{
+  "workspaceId": "user-service",
+  "name": "User Service API",
+  "status": "active"
+}
+```
+
+Sin `createdAt`, `updatedAt`, `metadata`, etc.
+
+### Nested Field Selection
+
+```http
+GET /v1/workspaces?fields=name,metadata(description,tags)
+
+{
+  "name": "User Service API",
+  "metadata": {
+    "description": "...",
+    "tags": [...]
+  }
+}
+```
+
+---
+
+## Webhooks
+
+Para notificaciones push sobre eventos.
+
+### Registro de Webhook
+
+```http
+POST /v1/webhooks
+Content-Type: application/json
+
+{
+  "url": "https://tu-dominio.com/webhooks/apifactory",
+  "events": [
+    "workspace.created",
+    "workspace.updated",
+    "file.uploaded"
+  ],
+  "headers": {
+    "X-Custom-Header": "value"
+  }
+}
+
+HTTP/1.1 201 Created
+
+{
+  "webhookId": "hook-abc123",
+  "status": "active",
+  "createdAt": "2025-10-01T10:30:00Z"
+}
+```
+
+### Envío de Webhook
+
+```http
+POST https://tu-dominio.com/webhooks/apifactory
+Content-Type: application/json
+X-Webhook-Signature: sha256=abc123...
+X-Webhook-Id: evt-def456
+X-Webhook-Timestamp: 1633081800
+
+{
+  "event": "workspace.created",
+  "data": {
+    "workspaceId": "user-service",
+    "name": "User Service API"
+  }
+}
+```
+
+**Headers obligatorios:**
+- `X-Webhook-Signature` (HMAC-SHA256 para validar)
+- `X-Webhook-Id` (ID único del evento)
+- `X-Webhook-Timestamp` (Unix timestamp)
+
+---
+
+## Deprecation
+
+### Deprecar Campos
+
+En OpenAPI, marcar campos obsoletos:
+
+```yaml
+properties:
+  legacyField:
+    type: string
+    deprecated: true
+    description: |
+      **Deprecado desde v1.5**
+      Use `newField` en su lugar.
+  
+  newField:
+    type: string
+    description: Reemplazo de legacyField
+```
+
+### Deprecar Endpoints
+
+```yaml
+paths:
+  /v1/workspaces-old:
+    deprecated: true
+    get:
+      summary: Obtener workspaces
+      description: |
+        ⚠️ **DEPRECADO** - Use `GET /v1/workspaces` en su lugar.
+        Será removido el 2026-01-01.
+```
+
+### Política de Deprecation
+
+1. Anunciar 6 meses antes de deprecación
+2. Mantener 12 meses después de deprecación
+3. Incluir en headers: `Deprecation: true`
+4. Proporcionar alternativa clara
+
+```http
+HTTP/1.1 200 OK
+Deprecation: true
+Sunset: Fri, 01 Jan 2026 00:00:00 GMT
+Link: </v2/workspaces>; rel="successor-version"
+```
+
+
 
 ### Paginación por Offset
 
@@ -813,9 +1299,11 @@ schemas:
 
 Usar esta lista antes de lanzar un endpoint:
 
-- [ ] **URL:** Minúsculas, plural, sin RPC (`/v1/resources`)
-- [ ] **Métodos:** GET, POST, PATCH, DELETE apropiados
-- [ ] **Códigos HTTP:** 200, 201, 204, 400, 401, 403, 404, 409, 422, 429, 500
+- [ ] **URL:** Minúsculas, plural, RESTful (`/v1/resources`)
+- [ ] **Métodos:** GET, POST, PATCH, DELETE, PUT (si aplica)
+- [ ] **Tags:** Un tag único por endpoint
+- [ ] **OperationId:** Único, formato `{resource}#{action}`
+- [ ] **Códigos HTTP:** 200, 201, 204, 400, 401, 403, 404, 409, 422, 429, 500, 503
 - [ ] **Headers:** Content-Type, Authorization, ETag, Rate-Limit
 - [ ] **Paginación:** limit, offset, total, hasMore (si aplica)
 - [ ] **Filtrado:** Query params para filters (`?status=active`)
@@ -828,6 +1316,13 @@ Usar esta lista antes de lanzar un endpoint:
 - [ ] **Idempotency:** Idempotency-Key para POSTs
 - [ ] **Soft Delete:** Status=archived en lugar de DELETE físico
 - [ ] **Campos Computed:** Marcar como readOnly
+- [ ] **Long-running ops:** Si tarda >30s, usar pattern de operaciones
+- [ ] **Bulk operations:** `POST /resources:batch{Action}` si aplica
+- [ ] **Caching:** Cache-Control headers apropiados
+- [ ] **Content-Type:** Soportar application/json y application/yaml
+- [ ] **Partial responses:** Parámetro `fields` si aplica
+- [ ] **Webhooks:** Si requiere notificaciones push
+- [ ] **Deprecation:** Marcar si endpoint es legacy
 - [ ] **Documentación:** OpenAPI completo con ejemplos
 - [ ] **Rate Limiting:** Headers X-RateLimit-* presentes
 - [ ] **CORS:** Headers de seguridad apropiados
